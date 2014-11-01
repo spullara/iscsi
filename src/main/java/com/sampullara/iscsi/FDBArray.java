@@ -12,10 +12,9 @@ import com.foundationdb.directory.DirectorySubspace;
 
 import java.util.Arrays;
 import java.util.concurrent.Semaphore;
-import java.util.function.Consumer;
 
 /**
- * Created by sam on 11/1/14.
+ * Block storage in FDB
  */
 public class FDBArray {
 
@@ -31,13 +30,13 @@ public class FDBArray {
 
   /**
    * Arrays are 0 indexed byte arrays using valueSize bytes per value.
-   *  @param type
+   *
+   * @param type
    * @param name
    */
   public FDBArray(String type, String name, int concurrency) {
     db = fdb.open();
-    DirectoryLayer dl = DirectoryLayer.getDefault();
-    ds = dl.createOrOpen(db, Arrays.asList(type, name)).get();
+    ds = DirectoryLayer.getDefault().createOrOpen(db, Arrays.asList(type, name)).get();
     semaphore = new Semaphore(concurrency);
   }
 
@@ -46,10 +45,10 @@ public class FDBArray {
       @Override
       public Future<Void> apply(Transaction tx) {
         long firstBlock = offset / BLOCK_SIZE;
-        int blockOffset = (int) (offset % BLOCK_SIZE);
-        int shift = BLOCK_SIZE - blockOffset;
         int length = write.length;
+        int blockOffset = (int) (offset % BLOCK_SIZE);
         long lastBlock = (offset + length) / BLOCK_SIZE;
+        int shift = BLOCK_SIZE - blockOffset;
         // Special case first block and last block
         byte[] firstBlockKey = ds.get(firstBlock).pack();
         semaphore.acquireUninterruptibly();
@@ -59,8 +58,7 @@ public class FDBArray {
             if (bytes == null) {
               bytes = new byte[BLOCK_SIZE];
             }
-            int writeLength = Math.min(write.length, BLOCK_SIZE - blockOffset);
-            System.out.println("Writing to first block: " + blockOffset + " -> " + blockOffset + writeLength);
+            int writeLength = Math.min(length, shift);
             System.arraycopy(write, 0, bytes, blockOffset, writeLength);
             tx.set(firstBlockKey, bytes);
             return ReadyFuture.DONE;
@@ -72,8 +70,7 @@ public class FDBArray {
           for (long i = firstBlock + 1; i < lastBlock; i++) {
             byte[] key = ds.get(i).pack();
             int writeBlock = (int) (i - firstBlock);
-            int position = writeBlock * BLOCK_SIZE - shift;
-            System.out.println("Writing to block: " + i + ", " + writeBlock + ", " + position);
+            int position = (writeBlock - 1) * BLOCK_SIZE + shift;
             System.arraycopy(write, position, bytes, 0, BLOCK_SIZE);
             tx.set(key, bytes);
           }
@@ -87,8 +84,7 @@ public class FDBArray {
                   if (bytes == null) {
                     bytes = new byte[BLOCK_SIZE];
                   }
-                  int position = (int) ((lastBlock - firstBlock) * BLOCK_SIZE - shift);
-                  System.out.println("Writing to block: " + lastBlock + ", " + position + ", " + (length - position));
+                  int position = (int) ((lastBlock - firstBlock - 1) * BLOCK_SIZE + shift);
                   System.arraycopy(write, position, bytes, 0, length - position);
                   tx.set(lastBlockKey, bytes);
                   return ReadyFuture.DONE;
@@ -104,32 +100,37 @@ public class FDBArray {
   }
 
   public Future<Void> read(byte[] read, long offset) {
-    return db.runAsync(new Function<Transaction, Future<Void>>() {
+    semaphore.acquireUninterruptibly();
+    Future<Void> result = db.runAsync(new Function<Transaction, Future<Void>>() {
       @Override
       public Future<Void> apply(Transaction tx) {
         long firstBlock = offset / BLOCK_SIZE;
         int blockOffset = (int) (offset % BLOCK_SIZE);
         int length = read.length;
         long lastBlock = (offset + length) / BLOCK_SIZE;
-        tx.getRange(ds.get(firstBlock).pack(), ds.get(lastBlock + 1).pack()).forEach(new Consumer<KeyValue>() {
-          @Override
-          public void accept(KeyValue keyValue) {
-            long blockId = ds.unpack(keyValue.getKey()).getLong(0);
-            byte[] value = keyValue.getValue();
-            int blockPosition = (int) ((blockId - firstBlock) * BLOCK_SIZE);
-            int shift = BLOCK_SIZE - blockOffset;
-            if (blockId == firstBlock) {
-              System.arraycopy(value, blockOffset, read, 0, Math.min(shift, read.length));
-            } else if (blockId == lastBlock) {
-              System.arraycopy(value, 0, read, blockPosition + shift, read.length - blockPosition - shift);
+        for (KeyValue keyValue : tx.getRange(ds.get(firstBlock).pack(), ds.get(lastBlock + 1).pack())) {
+          long blockId = ds.unpack(keyValue.getKey()).getLong(0);
+          byte[] value = keyValue.getValue();
+          int blockPosition = (int) ((blockId - firstBlock) * BLOCK_SIZE);
+          int shift = BLOCK_SIZE - blockOffset;
+          if (blockId == firstBlock) {
+            int firstBlockLength = Math.min(shift, read.length);
+            System.arraycopy(value, blockOffset, read, 0, firstBlockLength);
+          } else {
+            int position = blockPosition - BLOCK_SIZE + shift;
+            if (blockId == lastBlock) {
+              int lastLength = read.length - position;
+              System.arraycopy(value, 0, read, position, lastLength);
             } else {
-              System.arraycopy(value, 0, read, blockPosition + shift, BLOCK_SIZE);
+              System.arraycopy(value, 0, read, position, BLOCK_SIZE);
             }
           }
-        });
+        }
         return ReadyFuture.DONE;
       }
     });
+    result.onReady(semaphore::release);
+    return result;
   }
 
   public void clear() {
