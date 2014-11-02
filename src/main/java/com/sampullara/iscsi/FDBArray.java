@@ -26,11 +26,21 @@ public class FDBArray {
   private final DirectorySubspace ds;
   private final int blockSize;
 
+  // Used for copies
+  private final ThreadLocal<byte[]> buffer = new ThreadLocal<byte[]>() {
+    @Override
+    protected byte[] initialValue() {
+      return new byte[blockSize];
+    }
+  };
+
   /**
-   * Arrays are 0 indexed byte arrays using BLOCK_SIZE bytes per value.
+   * Arrays are 0 indexed byte arrays using blockSize bytes per value.
+   *
    * @param blockSize
    * @param type
-   * @param database  */
+   * @param database
+   */
   public FDBArray(Database database, DirectorySubspace ds, int blockSize) {
     this.database = database;
     this.ds = ds;
@@ -59,7 +69,7 @@ public class FDBArray {
     return database.runAsync(new Function<Transaction, Future<Void>>() {
       @Override
       public Future<Void> apply(Transaction tx) {
-        byte[] bytes = new byte[blockSize];
+        byte[] bytes = buffer.get();
         long firstBlock = offset / blockSize;
         int length = write.length;
         int blockOffset = (int) (offset % blockSize);
@@ -74,6 +84,7 @@ public class FDBArray {
             @Override
             public Future<Void> apply(byte[] currentBytes) {
               if (currentBytes == null) {
+                // Don't use the buffer since we need it to be initialized to 0
                 currentBytes = new byte[blockSize];
               }
               int writeLength = Math.min(length, shift);
@@ -103,23 +114,19 @@ public class FDBArray {
             tx.set(key, bytes);
           }
           byte[] lastBlockKey = data.get(lastBlock).pack();
-          result = result.flatMap(new Function<Void, Future<Void>>() {
+          result = result.flatMap($ -> tx.get(lastBlockKey).flatMap(new Function<byte[], Future<Void>>() {
             @Override
-            public Future<Void> apply(Void aVoid) {
-              return tx.get(lastBlockKey).flatMap(new Function<byte[], Future<Void>>() {
-                @Override
-                public Future<Void> apply(byte[] bytes) {
-                  if (bytes == null) {
-                    bytes = new byte[blockSize];
-                  }
-                  int position = (int) ((lastBlock - firstBlock - 1) * blockSize + shift);
-                  System.arraycopy(write, position, bytes, 0, length - position);
-                  tx.set(lastBlockKey, bytes);
-                  return ReadyFuture.DONE;
-                }
-              });
+            public Future<Void> apply(byte[] bytes) {
+              if (bytes == null) {
+                // Don't use the buffer since we need it to be initialized to 0
+                bytes = new byte[blockSize];
+              }
+              int position = (int) ((lastBlock - firstBlock - 1) * blockSize + shift);
+              System.arraycopy(write, position, bytes, 0, length - position);
+              tx.set(lastBlockKey, bytes);
+              return ReadyFuture.DONE;
             }
-          });
+          }));
         }
         return result;
       }

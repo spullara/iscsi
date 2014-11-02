@@ -8,10 +8,13 @@ import org.jscsi.target.storage.IStorageModule;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.logging.Logger;
 
 import static java.util.Arrays.asList;
 
 public class FDBStorage implements IStorageModule {
+
+  private static final Logger log = Logger.getLogger("FDBStorage");
 
   private static final int BLOCKS = 1_000_000_000;
   private final FDBArray fa;
@@ -29,11 +32,11 @@ public class FDBStorage implements IStorageModule {
   @Override
   public int checkBounds(long logicalBlockAddress, int transferLengthInBlocks) {
     if (logicalBlockAddress > BLOCKS) {
-      System.out.println("Bound failure: " + logicalBlockAddress);
+      log.warning("Bound failure: " + logicalBlockAddress);
       return 1;
     }
     if (logicalBlockAddress + transferLengthInBlocks - 1 > BLOCKS || transferLengthInBlocks < 0) {
-      System.out.println("Bound failure: " + logicalBlockAddress + ", " + transferLengthInBlocks);
+      log.warning("Bound failure: " + logicalBlockAddress + ", " + transferLengthInBlocks);
       return 2;
     }
     return 0;
@@ -48,7 +51,7 @@ public class FDBStorage implements IStorageModule {
   public void read(byte[] bytes, long storageIndex) throws IOException {
     if (closed) throw new IOException("Closed");
     bytesRead.add(bytes.length);
-    System.out.println("Reading: " + bytes.length + ", " + writesInput + ", " + writesComplete + ", " + bytesRead);
+    log.info("Reading: " + bytes.length + ", " + writesInput + ", " + writesComplete + ", " + bytesRead);
     flush();
     fa.read(bytes, storageIndex).get();
   }
@@ -66,7 +69,7 @@ public class FDBStorage implements IStorageModule {
       }
       long diff = System.currentTimeMillis() - start;
       if (diff > 10) {
-        System.out.println("Flush paused for " + diff + "ms");
+        log.warning("Flush paused for " + diff + "ms");
       }
     }
   }
@@ -80,7 +83,7 @@ public class FDBStorage implements IStorageModule {
       writesComplete.increment();
       bytesWritten.add(bytes.length);
       if (writesComplete.longValue() == writesInput.longValue()) {
-        System.out.println("Writes complete: " + writesComplete + ", "  + bytesWritten);
+        log.info("Writes complete: " + writesComplete + ", "  + bytesWritten);
       }
       synchronized (this) {
         this.notifyAll();
