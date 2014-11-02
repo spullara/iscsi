@@ -16,7 +16,7 @@ import java.util.concurrent.Executors;
 public class FDBiSCSIServer {
   public static void main(String[] args) throws IOException, SAXException, ParserConfigurationException {
     Database db = FDB.selectAPIVersion(200).open();
-    Target target = new Target("com.sampullara.iscsi", "fdbiscsi", new FDBStorage(db, "fdbiscsi"));
+    Target target = new Target("iqn.2014-11.com.sampullara:storage:fdbiscsi", "fdbiscsi", new FDBStorage(db, "fdbiscsi"));
     Configuration conf = new Configuration("");
     List<Target> targets = conf.getTargets();
     targets.add(target);
