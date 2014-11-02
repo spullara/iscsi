@@ -1,5 +1,7 @@
 package com.sampullara.iscsi;
 
+import com.foundationdb.Database;
+import com.foundationdb.FDB;
 import org.jscsi.target.Configuration;
 import org.jscsi.target.Target;
 import org.jscsi.target.TargetServer;
@@ -13,7 +15,8 @@ import java.util.concurrent.Executors;
 
 public class FDBiSCSIServer {
   public static void main(String[] args) throws IOException, SAXException, ParserConfigurationException {
-    Target target = new Target("com.sampullara.iscsi", "fdbiscsi", new FDBStorage());
+    Database db = FDB.selectAPIVersion(200).open();
+    Target target = new Target("com.sampullara.iscsi", "fdbiscsi", new FDBStorage(db, "fdbiscsi"));
     Configuration conf = new Configuration("");
     List<Target> targets = conf.getTargets();
     targets.add(target);

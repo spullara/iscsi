@@ -1,10 +1,15 @@
 package com.sampullara.iscsi;
 
+import com.foundationdb.Database;
 import com.foundationdb.async.Future;
+import com.foundationdb.directory.DirectoryLayer;
+import com.foundationdb.directory.DirectorySubspace;
 import org.jscsi.target.storage.IStorageModule;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.LongAdder;
+
+import static java.util.Arrays.asList;
 
 public class FDBStorage implements IStorageModule {
 
@@ -16,19 +21,20 @@ public class FDBStorage implements IStorageModule {
   private LongAdder bytesRead = new LongAdder();
   private volatile boolean closed = false;
 
-  public FDBStorage() {
-    fa = new FDBArray("iscsi", "test", 100);
+  public FDBStorage(Database db, String name) {
+    DirectorySubspace ds = DirectoryLayer.getDefault().createOrOpen(db, asList("com.sampullara.fdb.storage", name)).get();
+    fa = new FDBArray(db, ds, 512);
   }
 
   @Override
   public int checkBounds(long logicalBlockAddress, int transferLengthInBlocks) {
     if (logicalBlockAddress > BLOCKS) {
       System.out.println("Bound failure: " + logicalBlockAddress);
-//      return 1;
+      return 1;
     }
-    if (logicalBlockAddress + transferLengthInBlocks - 1> BLOCKS || transferLengthInBlocks < 0) {
+    if (logicalBlockAddress + transferLengthInBlocks - 1 > BLOCKS || transferLengthInBlocks < 0) {
       System.out.println("Bound failure: " + logicalBlockAddress + ", " + transferLengthInBlocks);
-//      return 2;
+      return 2;
     }
     return 0;
   }
