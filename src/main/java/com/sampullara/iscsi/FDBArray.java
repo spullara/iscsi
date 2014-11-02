@@ -29,7 +29,7 @@ public class FDBArray {
   private final Semaphore semaphore;
 
   /**
-   * Arrays are 0 indexed byte arrays using valueSize bytes per value.
+   * Arrays are 0 indexed byte arrays using BLOCK_SIZE bytes per value.
    *
    * @param type
    * @param name
@@ -44,6 +44,7 @@ public class FDBArray {
     return db.runAsync(new Function<Transaction, Future<Void>>() {
       @Override
       public Future<Void> apply(Transaction tx) {
+        byte[] bytes = new byte[BLOCK_SIZE];
         long firstBlock = offset / BLOCK_SIZE;
         int length = write.length;
         int blockOffset = (int) (offset % BLOCK_SIZE);
@@ -52,21 +53,34 @@ public class FDBArray {
         // Special case first block and last block
         byte[] firstBlockKey = ds.get(firstBlock).pack();
         semaphore.acquireUninterruptibly();
-        Future<Void> result = tx.get(firstBlockKey).flatMap(new Function<byte[], Future<Void>>() {
-          @Override
-          public Future<Void> apply(byte[] bytes) {
-            if (bytes == null) {
-              bytes = new byte[BLOCK_SIZE];
+        Future<Void> result;
+        if (blockOffset > 0 || (blockOffset == 0 && length < BLOCK_SIZE)) {
+          // Only need to do this if the first block is partial
+          result = tx.get(firstBlockKey).flatMap(new Function<byte[], Future<Void>>() {
+            @Override
+            public Future<Void> apply(byte[] bytes) {
+              if (bytes == null) {
+                bytes = new byte[BLOCK_SIZE];
+              }
+              int writeLength = Math.min(length, shift);
+              System.arraycopy(write, 0, bytes, blockOffset, writeLength);
+              tx.set(firstBlockKey, bytes);
+              return ReadyFuture.DONE;
             }
-            int writeLength = Math.min(length, shift);
-            System.arraycopy(write, 0, bytes, blockOffset, writeLength);
-            tx.set(firstBlockKey, bytes);
-            return ReadyFuture.DONE;
-          }
-        });
+          });
+        } else {
+          // In this case copy the full first block blindly
+          result = db.runAsync(new Function<Transaction, Future<Void>>() {
+            @Override
+            public Future<Void> apply(Transaction tx) {
+              System.arraycopy(write, 0, bytes, 0, BLOCK_SIZE);
+              tx.set(firstBlockKey, bytes);
+              return ReadyFuture.DONE;
+            }
+          });
+        }
         if (lastBlock > firstBlock) {
           // For the blocks in the middle we can just blast values in without looking at the current bytes
-          byte[] bytes = new byte[BLOCK_SIZE];
           for (long i = firstBlock + 1; i < lastBlock; i++) {
             byte[] key = ds.get(i).pack();
             int writeBlock = (int) (i - firstBlock);

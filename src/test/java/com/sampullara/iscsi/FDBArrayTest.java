@@ -33,11 +33,11 @@ public class FDBArrayTest {
       int length = r.nextInt(10000);
       byte[] bytes = new byte[length];
       r.nextBytes(bytes);
-      int offset = r.nextInt(10000);
+      int offset = r.nextInt(100000);
       fdbArray.write(offset, bytes).get();
       byte[] read = new byte[length];
       fdbArray.read(read, offset).get();
-      assertArrayEquals(bytes, read);
+      assertArrayEquals("Iteration: " + i + ", " + length + ", " + offset,bytes, read);
     }
     fdbArray.clear();
   }
